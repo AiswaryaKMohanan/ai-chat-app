@@ -9,7 +9,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 export default function Chat() {
-  const { messages, sendMessage, status, error } = useChat({
+  const { messages, sendMessage, status, error,regenerate } = useChat({
     transport: new DefaultChatTransport({
       api: '/api/chat',
     }),
@@ -97,6 +97,10 @@ export default function Chat() {
         >
           Send
         </button>
+            <button type="button"   className="shrink-0 bg-red-600 text-white text-xs px-3 py-1.5 rounded-md hover:bg-red-700"
+  onClick={() => regenerate()}>
+              Retry
+            </button>
       </form>
     </div>
   );
