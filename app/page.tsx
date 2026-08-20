@@ -2,28 +2,48 @@
 
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { supabase } from '@/lib/supabase';
 
 export default function Chat() {
-  const { messages, sendMessage, status, error } = useChat({
-    transport: new DefaultChatTransport({
-      api: '/api/chat',
-    }),
-  });
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [isInitializing, setIsInitializing] = useState(true);
+
+  useEffect(() => {
+    async function createConversation() {
+      const { data, error } = await supabase
+        .from('conversations')
+        .insert({ title: 'New conversation' })
+        .select()
+        .single();
+
+      if (data) setConversationId(data.id);
+      if (error) console.error('Failed to create conversation:', error);
+      setIsInitializing(false);
+    }
+    createConversation();
+  }, []);
+
+  const { messages, sendMessage, status, error, regenerate } = useChat({
+  transport: new DefaultChatTransport({
+    api: '/api/chat',
+  }),
+});
 
   const [input, setInput] = useState('');
   const isLoading = status === 'submitted' || status === 'streaming';
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim()) return;
-    sendMessage({ text: input });
+    if (!input.trim() || !conversationId) return; // guard against sending too early
+    sendMessage({ text: input }, { body: { conversationId } });
     setInput('');
   };
+
 
   return (
     <div className="flex flex-col max-w-2xl mx-auto py-12 h-screen">
@@ -32,11 +52,10 @@ export default function Chat() {
         {messages.map((m) => (
           <div
             key={m.id}
-            className={`p-3 rounded-lg max-w-[80%] ${
-              m.role === 'user'
+            className={`p-3 rounded-lg max-w-[80%] ${m.role === 'user'
                 ? 'bg-blue-500 text-white ml-auto'
                 : 'bg-gray-100 text-gray-900'
-            }`}
+              }`}
           >
             {m.parts.map((part, i) => {
               if (part.type !== 'text') return null;
@@ -86,16 +105,20 @@ export default function Chat() {
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask something…"
+          placeholder={isInitializing ? 'Setting up conversation…' : 'Ask something…'}
           className="flex-1 border rounded-lg px-4 py-2"
-          disabled={isLoading}
+          disabled={isLoading || isInitializing}
         />
         <button
           type="submit"
-          disabled={isLoading}
+          disabled={isLoading || isInitializing}
           className="bg-blue-500 text-white px-4 py-2 rounded-lg disabled:opacity-50"
         >
           Send
+        </button>
+        <button type="button" className="shrink-0 bg-red-600 text-white text-xs px-3 py-1.5 rounded-md hover:bg-red-700"
+          onClick={() => regenerate()}>
+          Retry
         </button>
       </form>
     </div>
