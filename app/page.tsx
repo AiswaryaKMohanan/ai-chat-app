@@ -12,43 +12,88 @@ import { supabase } from '@/lib/supabase';
 export default function Chat() {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
+  const [initialMessages, setInitialMessages] = useState<any[]>([]);
 
   useEffect(() => {
-    async function createConversation() {
-      const { data, error } = await supabase
+    async function loadOrCreateConversation() {
+      // 1. Try to find the most recent existing conversation
+      const { data: existingConvo, error: convoError } = await supabase
         .from('conversations')
-        .insert({ title: 'New conversation' })
-        .select()
-        .single();
+        .select('id')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-      if (data) setConversationId(data.id);
-      if (error) console.error('Failed to create conversation:', error);
+      if (convoError) {
+        console.error('Failed to fetch conversations:', convoError);
+        setIsInitializing(false);
+        return;
+      }
+
+      if (existingConvo) {
+        // 2a. Found one — load its messages
+        setConversationId(existingConvo.id);
+
+        const { data: pastMessages, error: messagesError } = await supabase
+          .from('messages')
+          .select('id, role, content')
+          .eq('conversation_id', existingConvo.id)
+          .order('created_at', { ascending: true });
+
+        if (messagesError) {
+          console.error('Failed to fetch messages:', messagesError);
+        } else if (pastMessages) {
+          // Convert DB rows into the UIMessage shape useChat expects
+          const formatted = pastMessages.map((m) => ({
+            id: m.id,
+            role: m.role as 'user' | 'assistant',
+            parts: [{ type: 'text' as const, text: m.content }],
+          }));
+          setInitialMessages(formatted);
+        }
+      } else {
+        // 2b. No conversations exist yet — create the first one
+        const { data: newConvo, error: createError } = await supabase
+          .from('conversations')
+          .insert({ title: 'New conversation' })
+          .select()
+          .single();
+
+        if (newConvo) setConversationId(newConvo.id);
+        if (createError) console.error('Failed to create conversation:', createError);
+      }
+
       setIsInitializing(false);
     }
-    createConversation();
+
+    loadOrCreateConversation();
   }, []);
 
   const { messages, sendMessage, status, error, regenerate } = useChat({
-  transport: new DefaultChatTransport({
-    api: '/api/chat',
-  }),
-});
+    messages: initialMessages, // seed with loaded history
+    transport: new DefaultChatTransport({
+      api: '/api/chat',
+    }),
+  });
 
   const [input, setInput] = useState('');
   const isLoading = status === 'submitted' || status === 'streaming';
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || !conversationId) return; // guard against sending too early
+    if (!input.trim() || !conversationId) return;
     sendMessage({ text: input }, { body: { conversationId } });
     setInput('');
   };
-
 
   return (
     <div className="flex flex-col max-w-2xl mx-auto py-12 h-screen">
       <div className="text-sm text-gray-500 mb-2">Messages: {messages.length}</div>
       <div className="flex-1 overflow-y-auto space-y-4 mb-4">
+        {isInitializing && (
+          <div className="text-gray-400 text-sm">Loading conversation…</div>
+        )}
+
         {messages.map((m) => (
           <div
             key={m.id}
@@ -105,7 +150,7 @@ export default function Chat() {
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder={isInitializing ? 'Setting up conversation…' : 'Ask something…'}
+          placeholder={isInitializing ? 'Loading…' : 'Ask something…'}
           className="flex-1 border rounded-lg px-4 py-2"
           disabled={isLoading || isInitializing}
         />
@@ -116,8 +161,11 @@ export default function Chat() {
         >
           Send
         </button>
-        <button type="button" className="shrink-0 bg-red-600 text-white text-xs px-3 py-1.5 rounded-md hover:bg-red-700"
-          onClick={() => regenerate()}>
+        <button
+          type="button"
+          className="shrink-0 bg-red-600 text-white text-xs px-3 py-1.5 rounded-md hover:bg-red-700"
+          onClick={() => regenerate()}
+        >
           Retry
         </button>
       </form>
