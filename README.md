@@ -1,36 +1,70 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AI Chat
 
-## Getting Started
+A chat app that answers questions with Claude, grounded in PDFs you upload (retrieval-augmented generation).
 
-First, run the development server:
+- **Next.js 15** (App Router) and React 19
+- **Claude** via the Vercel AI SDK, streamed to the browser
+- **Voyage AI** embeddings (`voyage-3.5`, 1024 dimensions)
+- **Supabase** (Postgres + pgvector) for conversations, messages and document chunks
+
+## Getting started
 
 ```bash
+npm install
+cp .env.example .env.local   # then fill in the keys
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `ANTHROPIC_API_KEY` | yes | Chat completions |
+| `VOYAGE_API_KEY` | yes | Embeddings for upload and retrieval |
+| `NEXT_PUBLIC_SUPABASE_URL` | yes | Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | yes | Supabase anon key |
+| `ANTHROPIC_MODEL` | no | Overrides the chat model |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Database
 
-## Learn More
+The app expects these objects in Supabase:
 
-To learn more about Next.js, take a look at the following resources:
+- `conversations` (`id`, `title`, `created_at`)
+- `messages` (`id`, `conversation_id`, `role`, `content`, `created_at`)
+- `document_chunks` (`id`, `document_name`, `chunk_text`, `embedding vector(1024)`)
+- `match_document_chunks(query_embedding, match_count)`: an RPC returning the closest chunks
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## How it works
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+1. **Upload** (`POST /api/upload`): the PDF is parsed, split into overlapping 1,000-character chunks, embedded, and stored in `document_chunks`.
+2. **Chat** (`POST /api/chat`): the latest question is embedded, the four closest chunks are retrieved and added to the system prompt, and the reply is streamed back. Both sides of the exchange are saved to `messages`.
 
-## Deploy on Vercel
+If retrieval fails, the chat still answers from general knowledge.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Scripts
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Development server |
+| `npm run build` / `npm start` | Production build and server |
+| `npm run lint` | ESLint |
+| `npm run typecheck` | TypeScript check |
+
+CI (`.github/workflows/ci.yml`) runs lint, typecheck and build on every pull request.
+
+## Limits
+
+| Limit | Value |
+| --- | --- |
+| Chat requests | 20 per minute per IP |
+| Uploads | 5 per 10 minutes per IP |
+| Message length | 8,000 characters |
+| PDF size | 10 MB, up to 500 chunks |
+
+Rate limiting is held in memory (`lib/api.ts`), so it applies per server instance. Use a shared store such as Redis when running more than one instance.
+
+## Before going public
+
+The app has **no user accounts**. Every visitor shares the same conversations and documents, and the browser talks to Supabase with the anon key. Before exposing it to the internet, add Supabase Auth, add a `user_id` column to each table, and enforce row-level security so users only see their own rows.
+
+`GET /api/health` returns `{"status":"ok"}` for uptime checks.
