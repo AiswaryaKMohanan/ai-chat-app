@@ -1,6 +1,7 @@
-import { supabase } from '@/lib/supabase';
+import { supabase, searchDocumentChunks } from '@/lib/supabase';
 import { anthropic } from '@ai-sdk/anthropic';
 import { streamText, convertToModelMessages } from 'ai';
+import { embedText } from '@/lib/voyage';
 
 export const runtime = 'edge';
 
@@ -24,28 +25,47 @@ export async function POST(req: Request) {
   try {
     const { messages, conversationId } = await req.json();
 
+    const { count } = await supabase
+  .from('document_chunks')
+  .select('*', { count: 'exact', head: true });
+console.log('=== DEBUG: total rows visible via JS client:', count);
+
     const lastUserMessage = messages[messages.length - 1];
     const lastUserText = lastUserMessage.parts
       .filter((p: any) => p.type === 'text')
       .map((p: any) => p.text)
       .join('');
 
+    await supabase.from('messages').insert({
+      conversation_id: conversationId,
+      role: 'user',
+      content: lastUserText,
+    });
 
-    const { data: userInsertData, error: userInsertError } = await supabase
-      .from('messages')
-      .insert({
-        conversation_id: conversationId,
-        role: 'user',
-        content: lastUserText,
-      })
-      .select();
+    // --- NEW: Retrieval step ---
+    const queryEmbedding = await embedText(lastUserText, 'query');
+    console.log('=== DEBUG: query embedding length:', queryEmbedding.length);
 
+    const relevantChunks = await searchDocumentChunks(queryEmbedding, 4);
+    console.log('=== DEBUG: chunks found:', relevantChunks.length);
+console.log('=== DEBUG: chunks:', JSON.stringify(relevantChunks, null, 2));
+
+    const context = relevantChunks
+      .map((c :any) => `[From ${c.document_name}]\n${c.chunk_text}`)
+      .join('\n\n---\n\n');
+
+
+
+    const systemPrompt = context
+      ? `You are a helpful assistant. Use the following context from an uploaded document to answer the user's question. If the answer isn't in the context, say so rather than guessing.\n\nCONTEXT:\n${context}`
+      : `You are a helpful assistant. No document context is currently available, so answer using your general knowledge.`;
+    // --- END NEW ---
 
     const result = await callWithBackoff(() =>
       Promise.resolve(
         streamText({
           model: anthropic('claude-sonnet-4-6'),
-          system: 'You are a helpful, concise assistant for a frontend developer learning AI engineering.',
+          system: systemPrompt,
           messages: convertToModelMessages(messages),
           maxOutputTokens: 1000,
         })
@@ -54,22 +74,17 @@ export async function POST(req: Request) {
 
     return result.toUIMessageStreamResponse({
       onFinish: async ({ messages: finishedMessages }) => {
-
         const assistantMessage = finishedMessages[finishedMessages.length - 1];
         const assistantText = assistantMessage.parts
           .filter((p: any) => p.type === 'text')
           .map((p: any) => p.text)
           .join('');
 
-        const { data: assistantInsertData, error: assistantInsertError } = await supabase
-          .from('messages')
-          .insert({
-            conversation_id: conversationId,
-            role: 'assistant',
-            content: assistantText,
-          })
-          .select();
-
+        await supabase.from('messages').insert({
+          conversation_id: conversationId,
+          role: 'assistant',
+          content: assistantText,
+        });
       },
       onError: (error) => {
         console.error('Streaming error:', error);
