@@ -88,6 +88,18 @@ export async function POST(req: Request) {
       embedding: embeddings[i],
     }));
 
+    // 4. Replace any earlier upload of the same file. Done only after embedding
+    // succeeded, so a failed upload leaves the old copy searchable.
+    const { error: deleteError, count: replacedChunks } = await supabase
+      .from('document_chunks')
+      .delete({ count: 'exact' })
+      .eq('document_name', documentName);
+
+    if (deleteError) {
+      console.error('Failed to remove the previous copy:', deleteError);
+      return jsonError('Failed to save the document. Please try again.', 500);
+    }
+
     for (let i = 0; i < rows.length; i += INSERT_BATCH_SIZE) {
       const { error } = await supabase
         .from('document_chunks')
@@ -95,6 +107,12 @@ export async function POST(req: Request) {
 
       if (error) {
         console.error('Failed to save chunks:', error);
+        // Don't leave a half-indexed document behind
+        const { error: cleanupError } = await supabase
+          .from('document_chunks')
+          .delete()
+          .eq('document_name', documentName);
+        if (cleanupError) console.error('Failed to clean up partial upload:', cleanupError);
         return jsonError('Failed to save the document. Please try again.', 500);
       }
     }
@@ -104,6 +122,7 @@ export async function POST(req: Request) {
       fileName: documentName,
       totalChunks: chunks.length,
       savedChunks: rows.length,
+      replacedChunks: replacedChunks ?? 0,
     });
   } catch (error) {
     console.error('Upload error:', error);

@@ -1,16 +1,16 @@
 'use client';
 
-import type { UIMessage } from 'ai';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChatView, type Conversation } from '@/components/chat-view';
 import { UploadButton } from '@/components/upload-button';
+import { messageMetadataSchema, type ChatMessage } from '@/lib/chat-types';
 import { supabase } from '@/lib/supabase';
 
 type ActiveChat = {
   // Changing `key` remounts ChatView; `id` is null until the first message is sent
   key: string;
   id: string | null;
-  messages: UIMessage[];
+  messages: ChatMessage[];
 };
 
 const newChat = (): ActiveChat => ({ key: crypto.randomUUID(), id: null, messages: [] });
@@ -29,7 +29,8 @@ export default function Home() {
 
     const { data, error } = await supabase
       .from('messages')
-      .select('id, role, content')
+      // `*` so the optional `metadata` column is included when it exists
+      .select('*')
       .eq('conversation_id', id)
       .order('created_at', { ascending: true });
 
@@ -43,11 +44,18 @@ export default function Home() {
     }
 
     // Convert DB rows into the UIMessage shape useChat expects
-    const messages: UIMessage[] = (data ?? []).map((m) => ({
-      id: String(m.id),
-      role: m.role as 'user' | 'assistant',
-      parts: [{ type: 'text' as const, text: m.content }],
-    }));
+    const messages: ChatMessage[] = (data ?? []).map((m) => {
+      const saved = messageMetadataSchema.safeParse(m.metadata);
+      return {
+        id: String(m.id),
+        role: m.role as 'user' | 'assistant',
+        parts: [{ type: 'text' as const, text: m.content }],
+        metadata: {
+          createdAt: new Date(m.created_at).getTime(),
+          ...(saved.success ? saved.data : {}),
+        },
+      };
+    });
     setActive({ key: id, id, messages });
   }, []);
 

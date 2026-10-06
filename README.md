@@ -30,9 +30,15 @@ Open [http://localhost:3000](http://localhost:3000).
 The app expects these objects in Supabase:
 
 - `conversations` (`id`, `title`, `created_at`)
-- `messages` (`id`, `conversation_id`, `role`, `content`, `created_at`)
+- `messages` (`id`, `conversation_id`, `role`, `content`, `created_at`, optional `metadata jsonb`)
 - `document_chunks` (`id`, `document_name`, `chunk_text`, `embedding vector(1024)`)
 - `match_document_chunks(query_embedding, match_count)`: an RPC returning the closest chunks
+
+The `metadata` column stores each reply's sources, token usage and cost so they survive a reload. The app works without it, but then those details are only shown for the current session. To add it:
+
+```sql
+alter table messages add column metadata jsonb;
+```
 
 ## How it works
 
