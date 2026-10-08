@@ -1,9 +1,10 @@
 'use client';
 
 import { useChat } from '@ai-sdk/react';
-import { DefaultChatTransport, type UIMessage } from 'ai';
+import { DefaultChatTransport } from 'ai';
 import { useEffect, useRef, useState } from 'react';
 import { Markdown } from '@/components/markdown';
+import { messageMetadataSchema, type ChatMessage, type MessageMetadata } from '@/lib/chat-types';
 import { supabase } from '@/lib/supabase';
 
 export type Conversation = { id: string; title: string | null };
@@ -22,18 +23,38 @@ function errorText(error: Error): string {
   return error.message && error.message.length < 200 ? error.message : GENERIC_ERROR;
 }
 
+function metadataText(metadata: MessageMetadata): string {
+  const { createdAt, model, inputTokens, outputTokens, totalTokens, costUsd } = metadata;
+  const tokens =
+    inputTokens !== undefined && outputTokens !== undefined
+      ? `${inputTokens} in / ${outputTokens} out tokens`
+      : totalTokens !== undefined && `${totalTokens} tokens`;
+
+  return [
+    createdAt !== undefined &&
+      new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    model,
+    tokens,
+    // Replies cost fractions of a cent, so two decimals would show $0.00
+    costUsd !== undefined && `$${costUsd.toFixed(4)}`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
 type Props = {
   conversationId: string | null;
-  initialMessages: UIMessage[];
+  initialMessages: ChatMessage[];
   onConversationCreated: (conversation: Conversation) => void;
 };
 
 // Mount with a new `key` to switch conversations: useChat only reads
 // `messages` on first render.
 export function ChatView({ conversationId, initialMessages, onConversationCreated }: Props) {
-  const { messages, sendMessage, status, error, regenerate, stop } = useChat({
+  const { messages, sendMessage, status, error, regenerate, stop } = useChat<ChatMessage>({
     messages: initialMessages,
     transport,
+    messageMetadataSchema,
   });
 
   const [input, setInput] = useState('');
@@ -106,6 +127,30 @@ export function ChatView({ conversationId, initialMessages, onConversationCreate
                   <Markdown key={i} text={part.text} />
                 );
               })}
+              {m.role === 'assistant' && m.metadata && (
+                <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {metadataText(m.metadata)}
+                </div>
+              )}
+              {m.role === 'assistant' && !!m.metadata?.sources?.length && (
+                <details className="mt-2 text-xs text-gray-600 dark:text-gray-300">
+                  <summary className="cursor-pointer">
+                    Sources ({m.metadata.sources.length})
+                  </summary>
+                  <ul className="mt-2 space-y-2">
+                    {m.metadata.sources.map((source, i) => (
+                      <li key={i} className="border-l-2 border-gray-300 dark:border-gray-600 pl-2">
+                        <div className="font-medium">
+                          [{i + 1}] {source.documentName}
+                          {source.similarity !== undefined &&
+                            ` · ${Math.round(source.similarity * 100)}% match`}
+                        </div>
+                        <p className="whitespace-pre-wrap line-clamp-4">{source.text}</p>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
             </div>
           ))}
 
